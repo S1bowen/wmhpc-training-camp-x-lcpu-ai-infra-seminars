@@ -82,21 +82,50 @@ make run/m0_env/01_first_mma
 
 (a) 一条 mma 的计算强度，分子是 $2MNK$，分母按 A、B 读入与 D 写回
 的字节总和计(S016 的口径)。
+答：正确的
 
 (b) mma.sync 是 warp 级协作指令:32 个 lane 各持 fragment 的一部分，
 要求全 warp 一致地执行这条指令；有 lane 发散时行为未定义。
+答：正确的
 
 (c) 增大 mma 的形状 M/N/K 能提高单条指令的计算强度，而且没有代价，
+(c) 增大 mmm16n8k32 e4m3 mmaa 的形状 M/N/K 能提高单条指令的计算强度，而且没有代价，
 所以指令形状越大越好。
+答：错误的，指令形状越大，每个warp的寄存器变多，occupancy下降，同时形状集合是硬件固定的，增大形状会导致电路变大也有影响
 
 (d) 只要单条 mma 的计算强度低于机器平衡点，GEMM kernel 就不可能逼近
 计算峰值。
+错误的，计算的应该是整个kernel的计算强度
 
 # sm80:fragment 与 mma.sync
 
 课上对 m16n8k16 fp16 推过 fragment 公式、手搓过单 tile mma
 (C03--C07)。现在你手推一遍这个 m16n8k32 fp8 shape，
 再看 ldmatrix 到底发挥了什么作用。
+
+1. 对于A
+gid = lane >> 2
+
+tid = lane & 3
+
+r为寄存器号
+
+row_m = gid + 8 * （r & 1）
+
+colomn_k = tid * 4 + 16 * (r >> 1)
+
+
+2. 对于B
+gid = lane >> 2
+
+tid = lane & 3
+
+row_k = 4 * tid + 16 * r
+
+colomn_m = gid
+
+3. ldmatrix 通过硬件支持的指令简化了数据从shared memory到寄存器的搬运流程，省去了手动的load操作
+
 
 ::: reading
 课件 S025--S041、C03--C08；PTX ISA 的 "Matrix Fragments for
@@ -120,13 +149,19 @@ make run/m1_sm80/01_fragment_map
 A 的同一个 b32 寄存器中的 4 个 fp8 元素沿矩阵哪个方向相邻？
 这个布局对 1.4 中使用 ldmatrix load 有什么影响？
 
+
+答：沿着K方向
 ### 1.2 {.prob type=DEBUG file=cuda/m1_sm80/02_bug_fragment.cu}
 
 这个程序发一条 m16n8k16 fp16 mma，判测会 FAIL。先运行一遍，后改动:
 
 (a) 描述症状：D 的哪些位置错、错成了什么(和对的部分是什么关系)；
+错误位置：几乎全部集中在 D 的第 8~15 行（后 8 行），第 0~7 行（前 8 行）是正确的。
+
+错误关系：对于后 8 行的任意列 j，D[8+k][j] 得到的值恰好等于正确结果中 D[k][j] 的值（k = 0..7）。
 
 (b) 修好它，并解释错的是哪个 fragment 的哪部分映射，为什么恰好产生(a)的症状。
+原因：A fragment 中对应行 groupID + 8 的四个元素（a2, a3, a6, a7）在装载时误用了 groupID，导致 A 的后 8 行数据被前 8 行覆盖。
 
 ```
 cd assignment02/cuda
